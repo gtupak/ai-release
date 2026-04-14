@@ -1,9 +1,11 @@
 package ai
 
 import (
+	"airelease/internal/config"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -52,9 +54,20 @@ func DefaultModel() string {
 	return defaultModel
 }
 
+func GetCustomModelURL() (string, error) {
+	cfg, err := config.LoadGlobal()
+	if err != nil {
+		return "", err
+	}
+	return cfg.CustomModelURL, nil
+}
+
 func GenerateReleaseSuggestion(
 	apiKey, model, repoSlug, baseBranch, latestReleaseTitle, latestReleaseTag string,
 	prs []PRContext,
+	customModelURL string,
+	customHeaders map[string]string,
+	openRouterMode bool,
 ) (ReleaseSuggestion, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
@@ -63,6 +76,15 @@ func GenerateReleaseSuggestion(
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = defaultModel
+	}
+
+	endpoint := endpointURL
+	if !openRouterMode && strings.TrimSpace(customModelURL) != "" {
+		baseURL := strings.TrimSuffix(strings.TrimSpace(customModelURL), "/")
+		if !strings.HasSuffix(baseURL, "/chat/completions") {
+			baseURL = baseURL + "/chat/completions"
+		}
+		endpoint = baseURL
 	}
 
 	reqBody := openRouterRequest{
@@ -90,14 +112,20 @@ func GenerateReleaseSuggestion(
 		return ReleaseSuggestion{}, fmt.Errorf("marshal OpenRouter request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, endpointURL, bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return ReleaseSuggestion{}, fmt.Errorf("create OpenRouter request: %w", err)
 	}
+
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("HTTP-Referer", "https://github.com")
 	req.Header.Set("X-Title", "airelease")
+	if !openRouterMode && len(customHeaders) > 0 {
+		for key, value := range customHeaders {
+			req.Header.Set(key, value)
+		}
+	}
 
 	client := &http.Client{Timeout: 45 * time.Second}
 	resp, err := client.Do(req)
@@ -106,8 +134,11 @@ func GenerateReleaseSuggestion(
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+
 	var decoded openRouterResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&decoded); err != nil {
 		return ReleaseSuggestion{}, fmt.Errorf("decode OpenRouter response: %w", err)
 	}
 
