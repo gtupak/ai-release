@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -75,6 +76,7 @@ func LatestRelease(repoRoot, slug string) (ReleaseView, bool, error) {
 
 	// If no JSON output was returned, it's likely a 404
 	if strings.TrimSpace(out) == "" {
+		fmt.Fprintf(os.Stderr, "DEBUG: GitHub API returned empty output for /repos/%s/releases/latest\n", slug)
 		return ReleaseView{}, false, nil
 	}
 

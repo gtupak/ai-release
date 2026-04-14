@@ -115,15 +115,8 @@ func Create(defaultBaseBranch string) error {
 	if apiKeyErr != nil && !hasCustomURL && !hasCustomHeaders {
 		fmt.Println("OpenRouter API key is not configured. Skipping AI suggestions.")
 	} else {
-		if apiKeyErr != nil && hasCustomURL {
-			if authHeader, exists := customHeaders["Authorization"]; exists {
-				apiKey = strings.TrimPrefix(authHeader, "Bearer ")
-			}
-		}
-		if apiKey == "" && hasCustomURL {
-			if authHeader, exists := customHeaders["Authorization"]; exists {
-				apiKey = authHeader
-			}
+		if apiKey == "" && hasCustomHeaders {
+			apiKey = extractAPIKeyFromHeader(customHeaders)
 		}
 
 		printHeader("AI release suggestions")
@@ -435,6 +428,13 @@ func resolveOpenRouterModel() (string, error) {
 	return ai.DefaultModel(), nil
 }
 
+func extractAPIKeyFromHeader(headers map[string]string) string {
+	if authHeader, exists := headers["Authorization"]; exists {
+		return strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	return ""
+}
+
 func startSpinner() func() {
 	var wg sync.WaitGroup
 	stop := make(chan bool)
@@ -526,28 +526,18 @@ func CreateWithDryRun(dryRun bool, defaultBaseBranch string) error {
 	printHeader("Create release (DRY RUN)")
 
 	if dryRun {
-		printHeader("AI release suggestions")
 		customModelURL, _ := config.GetCustomModelURL()
 		customHeaders, _ := config.GetCustomHeaders()
 		openRouterMode, _ := config.GetOpenRouterMode()
-
 		apiKey, apiKeyErr := resolveOpenRouterAPIKey()
 		hasCustomURL := strings.TrimSpace(customModelURL) != ""
 		hasCustomHeaders := len(customHeaders) > 0
 
 		if apiKeyErr != nil && !hasCustomURL && !hasCustomHeaders {
-			printHeader("AI release suggestions")
 			fmt.Println("OpenRouter API key is not configured. Skipping AI suggestions.")
 		} else {
-			if apiKeyErr != nil && hasCustomURL {
-				if authHeader, exists := customHeaders["Authorization"]; exists {
-					apiKey = strings.TrimPrefix(authHeader, "Bearer ")
-				}
-			}
-			if apiKey == "" && hasCustomURL {
-				if authHeader, exists := customHeaders["Authorization"]; exists {
-					apiKey = authHeader
-				}
+			if apiKey == "" && hasCustomHeaders {
+				apiKey = extractAPIKeyFromHeader(customHeaders)
 			}
 
 			model, _ := resolveOpenRouterModel()
@@ -569,17 +559,15 @@ func CreateWithDryRun(dryRun bool, defaultBaseBranch string) error {
 			if err != nil {
 				fmt.Println("Warning: AI suggestion failed:")
 				fmt.Println(err)
-			} else {
-				if suggestion.SuggestedVersion != "" {
-					fmt.Printf("Suggested version: v%s\n", suggestion.SuggestedVersion)
+			} else if suggestion.SuggestedVersion != "" {
+				fmt.Printf("Suggested version: v%s\n", suggestion.SuggestedVersion)
+			}
+			fmt.Println("Suggested titles:")
+			for i, title := range suggestion.Titles {
+				if i >= 3 {
+					break
 				}
-				fmt.Println("Suggested titles:")
-				for i, title := range suggestion.Titles {
-					if i >= 3 {
-						break
-					}
-					fmt.Printf("  %d) %s\n", i+1, title)
-				}
+				fmt.Printf("  %d) %s\n", i+1, title)
 			}
 		}
 

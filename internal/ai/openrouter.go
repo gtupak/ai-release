@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -134,11 +133,8 @@ func GenerateReleaseSuggestion(
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-
 	var decoded openRouterResponse
-	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&decoded); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		return ReleaseSuggestion{}, fmt.Errorf("decode OpenRouter response: %w", err)
 	}
 

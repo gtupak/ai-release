@@ -319,7 +319,7 @@ Commands:
   config openrouter-api-key <key> Save a global OpenRouter API key.
   config openrouter <true|false>  Enable/disable OpenRouter mode (default: true)
   config model <name>             Save a global OpenRouter model name.
-	config model-url <url>          Set a custom model endpoint (full path, e.g., https://example.com/v1/chat/completions)
+  config model-url <url>          Set a custom model endpoint (full path, e.g., https://example.com/v1/chat/completions)
   config model-header <k:v>       Add a custom header (format: key:value).
   config model-header remove <k>  Remove a custom header by key.
   config model-header list        List all custom headers.`
