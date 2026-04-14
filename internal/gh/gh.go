@@ -67,10 +67,17 @@ func Repo(repoRoot string) (RepoView, error) {
 func LatestRelease(repoRoot, slug string) (ReleaseView, bool, error) {
 	out, err := run(repoRoot, "api", "/repos/"+slug+"/releases/latest")
 	if err != nil {
-		if strings.Contains(err.Error(), "404") {
+		errStr := err.Error()
+		if strings.Contains(errStr, "404") || strings.Contains(errStr, "Not Found") {
 			return ReleaseView{}, false, nil
 		}
 		return ReleaseView{}, false, err
+	}
+
+	// If no JSON output was returned, it's likely a 404
+	if strings.TrimSpace(out) == "" {
+		fmt.Fprintf(os.Stderr, "DEBUG: GitHub API returned empty output for /repos/%s/releases/latest\n", slug)
+		return ReleaseView{}, false, nil
 	}
 
 	var release ReleaseView
@@ -191,13 +198,40 @@ func run(repoRoot string, args ...string) (string, error) {
 	if repoRoot != "" {
 		cmd.Dir = repoRoot
 	}
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("gh %s failed: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+		stderrStr := stderr.String()
+		stdoutStr := stdout.String()
+
+		// Check if stderr contains JSON error response from GitHub API
+		// even when exit code is 0 (gh sometimes outputs errors to stderr regardless of status)
+		if strings.Contains(stderrStr, "status:") {
+			jsonStart := strings.Index(stderrStr, "{")
+			if jsonStart >= 0 {
+				jsonEnd := strings.LastIndex(stderrStr, "}")
+				if jsonEnd > jsonStart {
+					jsonPart := stderrStr[jsonStart : jsonEnd+1]
+					if strings.Contains(jsonPart, "404") {
+						return "", fmt.Errorf("gh %s failed: %s", strings.Join(args, " "), strings.TrimSpace(stderrStr))
+					}
+					// Return the JSON even with error
+					return jsonPart, fmt.Errorf("gh %s failed: %s", strings.Join(args, " "), strings.TrimSpace(stderrStr))
+				}
+			}
 		}
-		return "", fmt.Errorf("gh %s failed: %w", strings.Join(args, " "), err)
+
+		// Fall back to normal error handling
+		output := strings.TrimSpace(stdoutStr)
+		if output != "" {
+			return output, fmt.Errorf("gh %s failed: %s", strings.Join(args, " "), strings.TrimSpace(stderrStr))
+		}
+		return "", fmt.Errorf("gh %s failed: %s", strings.Join(args, " "), strings.TrimSpace(stderrStr))
 	}
-	return string(out), nil
+
+	output := strings.TrimSpace(stdout.String())
+	return output, nil
 }

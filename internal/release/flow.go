@@ -100,14 +100,27 @@ func Create(defaultBaseBranch string) error {
 	}
 
 	printHeader("Create release")
-	model, _ := resolveOpenRouterModel()
-	apiKey, _ := resolveOpenRouterAPIKey()
+	customModelURL, _ := config.GetCustomModelURL()
+	customHeaders, _ := config.GetCustomHeaders()
+	openRouterMode, _ := config.GetOpenRouterMode()
+
+	apiKey, apiKeyErr := resolveOpenRouterAPIKey()
+	hasCustomURL := strings.TrimSpace(customModelURL) != ""
+	hasCustomHeaders := len(customHeaders) > 0
+
 	suggestion := ai.ReleaseSuggestion{}
 	releaseTitle := ""
 	suggestedVersion := ""
 
-	if apiKey != "" {
+	if apiKeyErr != nil && !hasCustomURL && !hasCustomHeaders {
+		fmt.Println("OpenRouter API key is not configured. Skipping AI suggestions.")
+	} else {
+		if apiKey == "" && hasCustomHeaders {
+			apiKey = extractAPIKeyFromHeader(customHeaders)
+		}
+
 		printHeader("AI release suggestions")
+		model, _ := resolveOpenRouterModel()
 		stopSpinner := startSpinner()
 		suggestion, err = ai.GenerateReleaseSuggestion(
 			apiKey,
@@ -117,6 +130,9 @@ func Create(defaultBaseBranch string) error {
 			latestTitle,
 			latestTag,
 			prs,
+			customModelURL,
+			customHeaders,
+			openRouterMode,
 		)
 		stopSpinner()
 		fmt.Println() // New line after spinner stops
@@ -141,8 +157,6 @@ func Create(defaultBaseBranch string) error {
 				fmt.Println("Warning: OpenRouter did not return 3 usable titles. Please enter your own.")
 			}
 		}
-	} else {
-		fmt.Println("OpenRouter API key is not configured. Skipping AI suggestions.")
 	}
 
 	version, err := chooseVersion(latestTag, suggestedVersion)
@@ -414,6 +428,13 @@ func resolveOpenRouterModel() (string, error) {
 	return ai.DefaultModel(), nil
 }
 
+func extractAPIKeyFromHeader(headers map[string]string) string {
+	if authHeader, exists := headers["Authorization"]; exists {
+		return strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	return ""
+}
+
 func startSpinner() func() {
 	var wg sync.WaitGroup
 	stop := make(chan bool)
@@ -443,4 +464,154 @@ func startSpinner() func() {
 		close(stop)
 		wg.Wait()
 	}
+}
+
+func CreateWithDryRun(dryRun bool, defaultBaseBranch string) error {
+	if dryRun {
+		fmt.Println("=== DRY RUN MODE ===")
+		fmt.Println("This will show what would happen without creating a release")
+		fmt.Println()
+	}
+
+	repoRoot, err := git.RepoRoot()
+	if err != nil {
+		return err
+	}
+
+	repoSlug, baseBranch, err := createBaseContext(repoRoot, defaultBaseBranch)
+	if err != nil {
+		return err
+	}
+
+	printHeader("Repository context")
+	fmt.Printf("Repository: %s\n", repoSlug)
+	fmt.Printf("Base branch: %s\n", baseBranch)
+
+	printHeader("Latest release")
+	latest, foundLatest, err := gh.LatestRelease(repoRoot, repoSlug)
+	if err != nil {
+		return err
+	}
+
+	latestTitle := ""
+	latestTag := ""
+	latestPublishedDate := ""
+	if foundLatest {
+		latestTitle = strings.TrimSpace(latest.Name)
+		if latestTitle == "" {
+			latestTitle = "(untitled release)"
+		}
+		latestTag = strings.TrimSpace(latest.TagName)
+		latestPublishedDate = publishedDate(latest.PublishedAt)
+		fmt.Printf("Title: %s\n", latestTitle)
+		fmt.Printf("Tag: %s\n", latestTag)
+	} else {
+		fmt.Println("No existing release found.")
+	}
+
+	printHeader("Pull requests included since last release")
+	prNumbers, err := discoverPRNumbers(repoRoot, repoSlug, baseBranch, latestTag, latestPublishedDate)
+	if err != nil {
+		return err
+	}
+
+	prs, _, err := loadPRContext(repoRoot, repoSlug, prNumbers)
+	if err != nil {
+		return err
+	}
+	if len(prs) == 0 {
+		fmt.Println("No merged pull requests detected since the last release.")
+	}
+
+	printHeader("Create release (DRY RUN)")
+
+	if dryRun {
+		customModelURL, _ := config.GetCustomModelURL()
+		customHeaders, _ := config.GetCustomHeaders()
+		openRouterMode, _ := config.GetOpenRouterMode()
+		apiKey, apiKeyErr := resolveOpenRouterAPIKey()
+		hasCustomURL := strings.TrimSpace(customModelURL) != ""
+		hasCustomHeaders := len(customHeaders) > 0
+
+		if apiKeyErr != nil && !hasCustomURL && !hasCustomHeaders {
+			fmt.Println("OpenRouter API key is not configured. Skipping AI suggestions.")
+		} else {
+			if apiKey == "" && hasCustomHeaders {
+				apiKey = extractAPIKeyFromHeader(customHeaders)
+			}
+
+			model, _ := resolveOpenRouterModel()
+			stopSpinner := startSpinner()
+			suggestion, err := ai.GenerateReleaseSuggestion(
+				apiKey,
+				model,
+				repoSlug,
+				baseBranch,
+				latestTitle,
+				latestTag,
+				prs,
+				customModelURL,
+				customHeaders,
+				openRouterMode,
+			)
+			stopSpinner()
+			fmt.Println()
+			if err != nil {
+				fmt.Println("Warning: AI suggestion failed:")
+				fmt.Println(err)
+			} else if suggestion.SuggestedVersion != "" {
+				fmt.Printf("Suggested version: v%s\n", suggestion.SuggestedVersion)
+			}
+			fmt.Println("Suggested titles:")
+			for i, title := range suggestion.Titles {
+				if i >= 3 {
+					break
+				}
+				fmt.Printf("  %d) %s\n", i+1, title)
+			}
+		}
+
+		fmt.Println()
+		fmt.Println("=== DRY RUN COMPLETE ===")
+		fmt.Println("No release was created.")
+		return nil
+	}
+
+	return Create(defaultBaseBranch)
+}
+
+func createBaseContext(repoRoot, defaultBaseBranch string) (string, string, error) {
+	if err := gh.EnsureInstalled(); err != nil {
+		return "", "", err
+	}
+
+	if !git.HasCommits(repoRoot) {
+		return "", "", fmt.Errorf("repository has no commits yet")
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err != nil {
+		return "", "", fmt.Errorf("this command must be run inside a git repository")
+	}
+	if _, err := git.CurrentBranch(repoRoot); err != nil {
+		return "", "", err
+	}
+	if err := gh.EnsureAuthHealthy(); err != nil {
+		return "", "", err
+	}
+
+	repo, err := gh.Repo(repoRoot)
+	if err != nil {
+		return "", "", err
+	}
+	repoSlug := strings.TrimSpace(repo.NameWithOwner)
+	defaultBranch := strings.TrimSpace(repo.DefaultBranchRef.Name)
+	if defaultBranch == "" {
+		defaultBranch = defaultBaseBranch
+	}
+
+	baseBranch, err := resolveBaseBranch(repoRoot, defaultBranch, defaultBaseBranch)
+	if err != nil {
+		return "", "", err
+	}
+
+	return repoSlug, baseBranch, nil
 }

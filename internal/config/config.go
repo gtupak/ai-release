@@ -17,6 +17,9 @@ const (
 type GlobalConfig struct {
 	OpenRouterAPIKey string            `json:"openrouter_api_key"`
 	OpenRouterModel  string            `json:"openrouter_model,omitempty"`
+	CustomModelURL   string            `json:"custom_model_url,omitempty"`
+	CustomHeaders    map[string]string `json:"custom_headers,omitempty"`
+	OpenRouterMode   bool              `json:"openrouter_mode"`
 	RepoBaseBranches map[string]string `json:"repo_base_branches,omitempty"`
 }
 
@@ -48,6 +51,10 @@ func LoadGlobal() (GlobalConfig, error) {
 	}
 	cfg.OpenRouterAPIKey = strings.TrimSpace(cfg.OpenRouterAPIKey)
 	cfg.OpenRouterModel = strings.TrimSpace(cfg.OpenRouterModel)
+	cfg.CustomModelURL = strings.TrimSpace(cfg.CustomModelURL)
+	if cfg.CustomHeaders == nil {
+		cfg.CustomHeaders = map[string]string{}
+	}
 	if cfg.RepoBaseBranches == nil {
 		cfg.RepoBaseBranches = map[string]string{}
 	}
@@ -62,6 +69,24 @@ func SaveGlobal(cfg GlobalConfig) error {
 
 	cfg.OpenRouterAPIKey = strings.TrimSpace(cfg.OpenRouterAPIKey)
 	cfg.OpenRouterModel = strings.TrimSpace(cfg.OpenRouterModel)
+	cfg.CustomModelURL = strings.TrimSpace(cfg.CustomModelURL)
+	if cfg.CustomHeaders == nil {
+		cfg.CustomHeaders = map[string]string{}
+	}
+	for key, value := range cfg.CustomHeaders {
+		cleanKey := strings.TrimSpace(key)
+		cleanValue := strings.TrimSpace(value)
+		if cleanKey == "" || cleanValue == "" {
+			delete(cfg.CustomHeaders, key)
+			continue
+		}
+		if cleanKey != key {
+			delete(cfg.CustomHeaders, key)
+			cfg.CustomHeaders[cleanKey] = cleanValue
+			continue
+		}
+		cfg.CustomHeaders[key] = cleanValue
+	}
 	if cfg.RepoBaseBranches == nil {
 		cfg.RepoBaseBranches = map[string]string{}
 	}
@@ -127,6 +152,103 @@ func GetRepoBaseBranch(repoRoot string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(cfg.RepoBaseBranches[repoKey]), nil
+}
+
+func SetCustomModelURL(url string, disableOpenRouter bool) error {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return fmt.Errorf("URL cannot be empty")
+	}
+
+	cfg, err := LoadGlobal()
+	if err != nil {
+		return err
+	}
+	cfg.CustomModelURL = url
+	if disableOpenRouter {
+		cfg.OpenRouterMode = false
+	}
+	return SaveGlobal(cfg)
+}
+
+func SetCustomHeader(key, value string, disableOpenRouter bool) error {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" {
+		return fmt.Errorf("header key cannot be empty")
+	}
+	if value == "" {
+		return fmt.Errorf("header value cannot be empty")
+	}
+
+	cfg, err := LoadGlobal()
+	if err != nil {
+		return err
+	}
+	if cfg.CustomHeaders == nil {
+		cfg.CustomHeaders = map[string]string{}
+	}
+	cfg.CustomHeaders[key] = value
+	if disableOpenRouter {
+		cfg.OpenRouterMode = false
+	}
+	return SaveGlobal(cfg)
+}
+
+func RemoveCustomHeader(key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("header key cannot be empty")
+	}
+
+	cfg, err := LoadGlobal()
+	if err != nil {
+		return err
+	}
+	if cfg.CustomHeaders == nil {
+		cfg.CustomHeaders = map[string]string{}
+	}
+	if _, exists := cfg.CustomHeaders[key]; !exists {
+		return fmt.Errorf("header %q does not exist", key)
+	}
+	delete(cfg.CustomHeaders, key)
+	return SaveGlobal(cfg)
+}
+
+func GetCustomModelURL() (string, error) {
+	cfg, err := LoadGlobal()
+	if err != nil {
+		return "", err
+	}
+	return cfg.CustomModelURL, nil
+}
+
+func GetCustomHeaders() (map[string]string, error) {
+	cfg, err := LoadGlobal()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.CustomHeaders == nil {
+		return map[string]string{}, nil
+	}
+	return cfg.CustomHeaders, nil
+}
+
+func SetOpenRouterMode(mode bool) error {
+	cfg, err := LoadGlobal()
+	if err != nil {
+		return err
+	}
+	cfg.OpenRouterMode = mode
+	return SaveGlobal(cfg)
+}
+
+func GetOpenRouterMode() (bool, error) {
+	cfg, err := LoadGlobal()
+	if err != nil {
+		return true, err
+	}
+	return cfg.OpenRouterMode, nil
 }
 
 func normalizeRepoPath(repoRoot string) (string, error) {
